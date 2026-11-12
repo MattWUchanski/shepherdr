@@ -107,23 +107,98 @@ export function parseDefaults(kind, stdout) {
       sandbox: out.sandbox_mode || null, approval: out.approval_policy || null, models };
 }
 
+// Read only the current viewport, never scrollback. Claude's header and prompt footer are live UI;
+// prose in the conversation is not a source of settings. Missing badges do not mean Manual.
+export function claudeRuntime(screen) {
+  const lines = String(screen ?? "").replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\r/g, "").split("\n");
+  const rule = (l) => /^\s*[─━]{8,}\s*$/.test(l);
+  let bottom = -1, top = -1;
+  for (let i = lines.length - 1; i >= 0; i--) if (rule(lines[i])) { bottom = i; break; }
+  for (let i = bottom - 1; i >= 0; i--) if (rule(lines[i])) { top = i; break; }
+  // The two rules enclose the current input, and only a few status rows follow it.
+  if (top < 0 || !lines.slice(top + 1, bottom).some((l) => /^\s*❯(?:\s|$)/.test(l)) || lines.slice(bottom + 1).filter((l) => l.trim()).length > 4) return {};
+  const out = { perm: null };
+  const footer = lines.slice(bottom + 1).join(" ").trim();
+  const mode = /^(?:[⏵⏸▶►»›❯\ufe0f]+\s*)?(auto mode|accept edits|plan mode|bypass permissions|manual mode|default mode)\s+(?:on\b|\(shift\+tab\b)/i.exec(footer)?.[1]?.toLowerCase();
+  const modes = { "auto mode": "auto", "accept edits": "acceptEdits", "plan mode": "plan", "bypass permissions": "bypassPermissions", "manual mode": "manual", "default mode": "manual" };
+  if (mode) out.perm = modes[mode];
+  // The effort chip is immediately above the input's top rule (when Claude chooses to show it).
+  const chip = /^\s*[●◉○◈·]?\s*(low|medium|high|xhigh|extra high|max)\s*·\s*\/effort\s*$/i.exec(lines[top - 1] ?? "");
+  if (chip) out.effort = chip[1].toLowerCase().replace("extra high", "xhigh");
+  // A startup banner is at the very top; its model row is directly after its version row.
+  for (let i = 0; i < Math.min(top - 1, 6); i++) {
+    if (!/^[\s▐▛▜▝▘▟▙▚▞█▀▄▌]*Claude Code v\d[\w.-]*\s*$/.test(lines[i])) continue;
+    const m = /^[\s▐▛▜▝▘▟▙▚▞█▀▄▌]*(Opus|Sonnet|Haiku|Fable)\s+(\d+)(?:\.(\d+))?(?:\s*\((1M)(?: context)?\))?(?:\s+with\s+(low|medium|high|xhigh|extra high|max)\s+effort)?\s*·\s*\S/i.exec(lines[i + 1] ?? "");
+    if (!m) continue;
+    out.model = `claude-${m[1].toLowerCase()}-${m[2]}${m[3] ? `-${m[3]}` : ""}`;
+    if (m[4]) out.alias = `${out.model}[1m]`;
+    if (m[5]) out.bannerEffort = m[5].toLowerCase().replace("extra high", "xhigh");
+    break;
+  }
+  return out;
+}
+
+// A snapshot belongs to one running process. Failed reads and late replies cannot leave another
+// session's mode in its picker. Only matched fields are kept, never terminal/conversation text.
+const runtimeKey = (t) => t?.state === "live" && t.foreground?.pid
+  && /^claude/.test(t.status?.app ?? t.foreground?.name ?? "")
+  ? `${t.address}|${t.foreground.pid}|${t.created_ms ?? ""}` : null;
+export class RuntimeSettings {
+  constructor() { this.key = null; this.value = {}; this.pending = null; }
+  get(t) { return this.key && this.key === runtimeKey(t) ? this.value : {}; }
+  async read(t, readScreen) {
+    const key = runtimeKey(t);
+    if (key !== this.key) { this.key = key; this.value = {}; this.pending = null; }
+    if (!key) return {};
+    if (this.pending) return this.pending;
+    const task = (async () => {
+      let value = {};
+      try { value = claudeRuntime(await readScreen(t.address)); } catch {}
+      if (this.key === key) this.value = value;
+      return this.key === key ? value : {};
+    })();
+    this.pending = task;
+    try { return await task; } finally { if (this.pending === task) this.pending = null; }
+  }
+}
+
+function modelId(model) {
+  if (!model) return null;
+  const row = CLAUDE_MODELS.find((m) => m.match.includes(model));
+  return (row?.match?.[1] ?? model).replace(/\[1m\]$/, "").replace(/-\d{8}$/, "");
+}
+
+function modelEffort(model, dflt) {
+  const id = modelId(model);
+  if (!id) return null;
+  // Newer models have per-model settings, not the legacy global effortLevel. Keep that
+  // fallback only for the older model families that used it, never an unknown session.
+  const version = /^claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2}))?$/.exec(id);
+  const legacy = version && (Number(version[2]) < 5 || (Number(version[2]) === 5 &&
+    (version[1] === "opus" && !version[3] || version[1] === "fable" && Number(version[3] ?? 0) <= 1)));
+  return dflt.per?.[id] ?? (legacy ? dflt.effort : null) ?? null;
+}
+
 // What the agent runs on now: { agent, model, effort, fast, used, window, alias }.
-export function current(kind, argv, meta, dflt) {
+export function current(kind, argv, meta, dflt, runtime = {}) {
   argv = argv ?? [];
   meta = meta ?? {};
   dflt = dflt ?? {};
   if (kind === "claude") {
     // a /model in place (SHEP-181) names the row it switched to, its 1M too, which the log's turns don't say
-    const alias = meta.alias ?? flag(argv, "--model") ?? dflt.model;
+    const requested = flag(argv, "--model") ?? dflt.model ?? null;
+    const model = meta.model ?? runtime.model ?? meta.alias ?? requested;
+    const bannerMatches = runtime.model && modelId(model) === modelId(runtime.model);
+    const alias = meta.alias ?? (bannerMatches ? runtime.alias : null) ?? (modelId(model) === modelId(requested) ? requested : null);
     let fast = dflt.fast;
     const s = flag(argv, "--settings");
     if (s && /"fastMode"\s*:\s*(true|false)/.test(s)) fast = /"fastMode"\s*:\s*true/.test(s);
     if (meta.speed) fast = meta.speed === "fast";
     const big = /\[1m\]/.test(alias ?? "") || (meta.used ?? 0) > 200000;
     // Claude keeps an effort per model (modelSettings), known once the log names the model.
-    const per = meta.model ? dflt.per?.[meta.model] ?? dflt.per?.[meta.model.replace(/-\d+$/, "")] : null;
-    const perm = argv.includes("--dangerously-skip-permissions") ? "bypassPermissions" : flag(argv, "--permission-mode") ?? dflt.mode ?? "manual";
-    return { agent: "claude", model: meta.model ?? alias, alias, effort: meta.effort ?? flag(argv, "--effort") ?? per ?? dflt.effort,
+    const per = modelEffort(model, dflt);
+    const perm = Object.hasOwn(runtime, "perm") ? runtime.perm : meta.perm ?? (argv.includes("--dangerously-skip-permissions") ? "bypassPermissions" : flag(argv, "--permission-mode") ?? dflt.mode ?? null);
+    return { agent: "claude", model, alias, effort: runtime.effort ?? meta.effort ?? (bannerMatches ? runtime.bannerEffort : null) ?? flag(argv, "--effort") ?? per,
       fast: Boolean(fast), perm: perm === "default" ? "manual" : perm, used: meta.used ?? null, window: meta.window ?? (big ? 1000000 : 200000) };
   }
   const o = overrides(argv);
@@ -162,15 +237,21 @@ export function contextWords(c) {
 export function menuFor(agent, dflt, current = null) {
   if (agent === "claude") {
     const models = CLAUDE_MODELS.map((m) => ({ id: m.id, name: m.name, efforts: CLAUDE_EFFORTS,
-      defaultEffort: dflt?.per?.[m.match[1].replace(/\[1m\]$/, "")] ?? dflt?.effort ?? null, fast: m.id.startsWith("opus") }));
+      defaultEffort: modelEffort(m.id, dflt ?? {}), fast: m.id.startsWith("opus") }));
     // a model typed by id (an older one it still takes) stays in the list while it runs
-    if (current && !models.some((m) => m.id === current)) models.unshift({ id: current, name: modelName(current), efforts: CLAUDE_EFFORTS, defaultEffort: dflt?.effort ?? null, fast: false });
+    if (current && !models.some((m) => m.id === current)) models.unshift({ id: current, name: modelName(current), efforts: CLAUDE_EFFORTS, defaultEffort: modelEffort(current, dflt ?? {}), fast: false });
     return { name: NAMES.claude, perms: PERMS.claude, models };
   }
   const all = (dflt?.models ?? []).map((m) => ({ id: m.id, name: m.label, efforts: m.efforts?.length ? m.efforts : ["low", "medium", "high", "xhigh"],
     defaultEffort: m.defaultEffort ?? dflt?.effort ?? null, fast: m.fast }));
   if (current && !all.some((m) => m.id === current)) all.unshift({ id: current, name: current, efforts: ["low", "medium", "high", "xhigh"], defaultEffort: dflt?.effort ?? null, fast: false });
   return { name: NAMES.codex, perms: PERMS.codex, models: all };
+}
+
+// A running session's unknown effort stays unknown when only Fast or permissions change.
+// Defaults are for a newly selected model (or the Settings picker), never evidence of live state.
+export function selectedEffort(pick, current, model) {
+  return pick.effort ?? (current && pick.agent === current.agent && pick.model === current.model ? null : model?.defaultEffort ?? null);
 }
 
 // The levels a model typed by id gets: its agent's usual ones.

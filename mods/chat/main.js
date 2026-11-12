@@ -386,6 +386,7 @@ export default class Chat extends View {
     this.copied = null;
     this.note = null;
     this.dflt = null;
+    this.runtime = new agent.RuntimeSettings();
     this.argv = null;
     this.call = null;
     this.press = null;
@@ -1149,7 +1150,7 @@ export default class Chat extends View {
     const kind = KINDS[t.status?.app] ?? KINDS[t.foreground?.name];
     // Back at its shell because the session it resumed is gone: a new agent starts there.
     if (!kind) { if (!(await this.checkLost(this.addr, cx, t))) this.set("unsupported", cx); return; }
-    this.t = t;
+    this.t = { ...t, address: this.addr }; // Keep the machine-qualified address returned to this chat.
     this.loadFirst(cx, t.labels);
     this.argv = t.foreground?.argv ?? t.argv ?? null;
     const pid = t.foreground?.pid;
@@ -1352,6 +1353,7 @@ export default class Chat extends View {
           return;
         }
         await this.pull(cx);
+        await this.readRuntime(cx);
         await this.lookJobs(cx);
         await this.flag();
         // Its own start screen, while it has no session (or a card is still open).
@@ -2672,6 +2674,16 @@ export default class Chat extends View {
 
   // ---- model button and picker -----------------------------------------------------------------
 
+  async readRuntime(cx) {
+    const before = JSON.stringify(this.runtime.get(this.t));
+    await this.runtime.read(this.t, async (addr) => {
+      const r = await hc(["read", addr, "--lines", "0"]);
+      if (r.code !== 0) throw new Error("The terminal could not be read");
+      return r.stdout;
+    });
+    if (JSON.stringify(this.runtime.get(this.t)) !== before) cx.notify();
+  }
+
   current() {
     if (!this.kind) return null;
     // A resumed conversation's log names the model it ran on before: until this process
@@ -2679,18 +2691,20 @@ export default class Chat extends View {
     let meta = this.conv?.meta ?? {};
     const born = this.t?.created_ms;
     if (born && meta.at && meta.at < born) meta = { used: meta.used, window: meta.window };
-    return agent.current(this.kind, this.argv, meta, this.dflt);
+    return agent.current(this.kind, this.argv, meta, this.dflt, this.runtime.get(this.t));
   }
 
   // The model picker (mods/chat-models), as a popover just above the model button: the chat
   // works out everything it shows (both agents' models, efforts, permission modes) and passes
   // it as props. `at`: where the button was pressed, in the window.
   openPicker(at, cx, name = null) {
-    const c = this.current();
-    if (!c || this.picking) return;
+    if (!this.current() || this.picking) return;
     this.picking = true;
     cx.spawn(async (cx) => {
       try {
+        await this.readRuntime(cx);
+        const c = this.current();
+        if (!c) return;
         const stale = !this.pickCache || Date.now() - this.pickCache.at > 60000 || this.pickCache.machine !== this.machine;
         if (stale) {
           const [claude, codex, known] = await Promise.all([agent.defaults("claude", this.machine), agent.defaults("codex", this.machine),

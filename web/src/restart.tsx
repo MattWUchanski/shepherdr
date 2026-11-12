@@ -387,7 +387,7 @@ function ModelMenu({ chat, typed }: { chat: string; typed?: string }) {
       .catch((e: Error) => setError(e.message))
   }, [chat, typed])
   const model = (s: MenuPick) => data?.menus[s.agent]?.models.find((m) => m.id === s.model) ?? null
-  const level = (s: MenuPick) => s.effort ?? model(s)?.defaultEffort ?? null
+  const level = (s: MenuPick) => AGc.selectedEffort(s, data?.current, model(s))
   const changes = () => {
     if (!data || !sel) return []
     const w = data.current, out: string[] = []
@@ -475,7 +475,7 @@ function ModelMenu({ chat, typed }: { chat: string; typed?: string }) {
                 <button type="button" aria-haspopup="menu" aria-expanded={perms} className={clsx(row, perms && 'bg-hover')} onClick={() => setPerms(!perms)}>
                   <ModeIcon className="size-3.5 shrink-0 text-fg3" />
                   <span className="flex-1">Permissions</span>
-                  <span className="shrink-0 text-[0.75rem] text-fg3">{perm?.label ?? ''}</span>
+                  <span className="shrink-0 text-[0.75rem] text-fg3">{perm?.label ?? 'Unknown'}</span>
                   <NextIcon className="size-3 shrink-0 text-fg3" />
                 </button>
               ) : null}

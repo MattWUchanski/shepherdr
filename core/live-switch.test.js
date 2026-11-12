@@ -186,3 +186,11 @@ test("the log reader keeps the lines a switch writes (Claude Code 2.1.308, Codex
   ]);
   expect(x.meta).toMatchObject({ model: "gpt-6-sol", effort: "medium", speed: "fast" });
 });
+
+
+test("selecting a permission from Unknown requires a restart so the permission is applied", () => {
+  const from = { agent: "claude", model: "opus", effort: "high", perm: null };
+  expect(liveOK(from, { ...from, effort: "max" })).toBe(true);
+  expect(liveOK(from, { ...from, perm: "auto" })).toBe(false);
+  expect(liveOK(from, { ...from, perm: "manual" })).toBe(false);
+});

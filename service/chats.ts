@@ -53,7 +53,10 @@ export class Chats {
   private followed = new Map<string, Followed>();
 
   constructor(private hub: Hub) {
-    const io = { sh: (script: string, args: string[], on: string | null) => sh(hub, script, args, on) };
+    const io = {
+      sh: (script: string, args: string[], on: string | null) => sh(hub, script, args, on),
+      screen: async (addr: string) => (await hub.call<{ text: string }>("terminal.read", { terminal: addr, lines: 0 })).text,
+    };
     this.io = io;
     hub.on((e) => { if ("terminal" in e && e.terminal && this.followed.has(e.terminal)) void this.tick(e.terminal); });
     setInterval(() => { for (const a of this.followed.keys()) void this.tick(a); }, 1000);
@@ -133,6 +136,7 @@ export class Chats {
       const t = await withForeground(addr, this.hub.terminals.get(addr));
       let changed = await f.reader.locate(t);
       if (await f.reader.pull()) changed = true;
+      if (await f.reader.lookRuntime(t)) changed = true;
       if (await f.reader.lookJobs()) changed = true;
       // its CLI says it does something else now (a status change, no new line in its log): told too
       const said = reportMsg(t);

@@ -6,6 +6,7 @@
 
 import { FIND, LOG, Conversation, records, resultText } from "./chat-log.js";
 import { BgJobs } from "./bg-jobs.js";
+import { RuntimeSettings } from "./agents.js";
 
 export const PAGE = 200;
 export const KEEP = 2000;
@@ -31,6 +32,7 @@ export class ChatReader {
     this.end = 0;
     this.records = [];
     this.conv = null;
+    this.runtime = new RuntimeSettings();
     this.bg = new BgJobs(); // what it left running in the background
     this.state = "finding"; // finding | pending (no log yet) | ready | none (not a chat agent) | missing
   }
@@ -71,6 +73,18 @@ export class ChatReader {
     this.kind = kind;
     this.pid = pid;
     return true;
+  }
+
+  // The foreground can be absent from a core list; locate() already resolved this reader's pid.
+  runtimeTerminal(t) {
+    return t && !t.foreground?.pid && this.pid ? { ...t, foreground: { ...t.foreground, pid: this.pid, name: this.kind } } : t;
+  }
+  runtimeFor(t) { return this.pinned ? {} : this.runtime.get(this.runtimeTerminal(t)); }
+  async lookRuntime(t) {
+    if (this.pinned || !this.io.screen) return false;
+    const terminal = this.runtimeTerminal(t), before = JSON.stringify(this.runtime.get(terminal));
+    await this.runtime.read(terminal, (addr) => this.io.screen(addr));
+    return JSON.stringify(this.runtime.get(terminal)) !== before;
   }
 
   // ---- what it left running in the background (core/bg-jobs.js) ----

@@ -38,7 +38,7 @@ test("the model menu's headings are the window's (mods/chat-models)", () => {
 });
 
 test("the model button says what the window's does", () => {
-  const { menus, defaults } = S.choicesFrom({ claude: { model: "opus[1m]", effort: "high", per: {} }, codex: { models: [{ id: "gpt-5", label: "GPT-5", efforts: ["low", "high"] }] } });
+  const { menus, defaults } = S.choicesFrom({ claude: { model: "opus[1m]", effort: "xhigh", per: { "claude-opus-5-5": "high" } }, codex: { models: [{ id: "gpt-5", label: "GPT-5", efforts: ["low", "high"] }] } });
   expect(S.modelLabel(menus, defaults)).toBe("Opus 5.5 · 1M · High");
   expect(S.modelLabel(menus, { agent: "claude", model: "opus", effort: "xhigh", fast: true })).toBe("Opus 5.5 · Extra high · Fast");
   expect(S.roleSel("reviewer", null, { menus, defaults, permDefault: { codex: "auto" } }, "claude")).toMatchObject({ unset: true, sel: { agent: "codex", model: "gpt-5" } });
@@ -111,4 +111,13 @@ test("Feedback offers and the repo they file to", () => {
   expect(S.feedbackRepo("")).toBe("");
   expect(S.feedbackRepo("not a repo")).toBeNull();
   expect(read("mods/shepherdr-settings/main.js")).toContain("feedbackRow(this, t)");
+});
+
+
+test("modern CLI model defaults do not inherit the legacy global effort", () => {
+  const { menus, defaults } = S.choicesFrom({ claude: { model: "opus", effort: "xhigh", per: {} } }, { claude: true });
+  expect(defaults.effort).toBeNull();
+  expect(S.modelLabel(menus, defaults)).toBe("Opus 5.5");
+  // An explicit Shepherdr role selection remains selected independently of the CLI defaults.
+  expect(S.modelLabel(menus, { agent: "claude", model: "opus", effort: "high" })).toBe("Opus 5.5 · High");
 });

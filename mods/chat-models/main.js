@@ -23,7 +23,7 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input, VirtualListScrollHandle, v_virtual_list, Scrollbar } from "gpui-base";
 import { theme, props, setShared, closeOverlay, home, readTextFile, writeTextFile } from "herdr";
-import { modelSections, parsePicks, pickKey, withPin, withRecent, PICKS_FILE, permAcross } from "./core/agents.js";
+import { modelSections, parsePicks, pickKey, withPin, withRecent, PICKS_FILE, permAcross, selectedEffort } from "./core/agents.js";
 import { dirs } from "./dirs.js";
 
 const AGENTS = ["claude", "codex"];
@@ -104,9 +104,9 @@ export default class ModelMenu extends View {
     return this.p.menus?.[s.agent]?.models?.find((m) => m.id === s.model) ?? null;
   }
 
-  // The level that applies: the chosen one, else the model's default.
+  // A live session keeps unknown effort until an effort or another model is selected.
   level(s) {
-    return s.effort ?? this.model(s)?.defaultEffort ?? null;
+    return selectedEffort(s, this.settingsMode ? null : this.was, this.model(s));
   }
 
   choose(m) {
@@ -165,7 +165,7 @@ export default class ModelMenu extends View {
     return div().size(14).flex_none().when(on, (el) => el.child(svg("mods/workspace-chrome/check.svg").size(14).text_color(t.foreground)));
   }
 
-  // That model's levels as one segmented control; the default shows chosen when none is set. Each level is as
+  // That model's levels as one segmented control; unknown live effort selects none. Each level is as
   // wide as its word and the room left is shared out, so Extra high reads whole (equal slices cut it).
   levels(t) {
     const m = this.model();
@@ -295,7 +295,7 @@ export default class ModelMenu extends View {
         .when(this.permOpen, (el) => el.bg(t.selected))
         .child(svg("mods/chat-models/shield.svg").size(14).flex_none().text_color(t.dim))
         .child(div().flex_1().child("Permissions"))
-        .child(div().flex_none().text_size(12).text_color(t.dim).child(perm?.label ?? ""))
+        .child(div().flex_none().text_size(12).text_color(t.dim).child(perm?.label ?? "Unknown"))
         .child(svg("mods/workspace-chrome/chevron-right.svg").size(12).flex_none().text_color(t.dim))))
       // another agent can't carry this conversation on: said before the press, not after
       .when(newChat, (el) => el.child(quiet(`${this.p.menus?.[this.sel.agent]?.name ?? "It"} starts a new conversation. This one stays in ${this.p.menus?.[this.was.agent]?.name ?? "its old agent"}’s history.`, 2 * NOTE)))
