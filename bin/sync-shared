@@ -9,6 +9,7 @@ source is core/<file> beside lib/, and each mod's copy is mods/<mod>/core/<file>
 
   bin/sync-shared                 copy every lib file into its mods
   bin/sync-shared --check         change nothing; exit 1 if any copy differs from lib
+  bin/sync-shared --check --installed  check shipped mods, leaving personal/artifact mods alone
   bin/sync-shared --from <copy>   a copy was edited by hand: make it the source, then sync
 
 A copy that differs from both lib and what this last wrote there (lib/.last/) was edited by
@@ -20,7 +21,7 @@ The helpers that go to other machines as one file each (herdr-secret, herdr-arti
 Shepherdr's paths between "# ---- SHEP:" and "# ---- end SHEP ----": the source is
 mods/tasks/bin/herdr_task/layout.py's PY, written in here too.
 """
-import hashlib, os, shutil, subprocess, sys
+import hashlib, json, os, shutil, subprocess, sys
 
 HOME = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 LIB, MODS = os.path.join(HOME, "lib"), os.path.join(HOME, "mods")
@@ -104,6 +105,15 @@ def shep_blocks(check):
 def main(argv):
     check = "--check" in argv
     table = copies()
+    # Installed homes also contain personal mods and generated artifact panels. Their bundled
+    # helpers are theirs to keep; only shipped mods must register copies in our source manifest.
+    # Source checks remain strict, including new mods that forgot to join lib/COPIES.
+    scanned_mods = sorted(os.listdir(MODS))
+    if "--installed" in argv:
+        with open(os.path.join(LIB, "addons.json")) as f:
+            manifest = json.load(f)
+            shipped = set(manifest["core"]["mods"]) | {m for addon in manifest["addons"] for m in addon.get("mods", [])}
+        scanned_mods = [m for m in scanned_mods if m in shipped]
     if "--from" in argv:
         src = os.path.realpath(argv[argv.index("--from") + 1])
         name = os.path.basename(src)
@@ -146,7 +156,7 @@ def main(argv):
             write(os.path.join(LAST, name), lib)
         # A copy made by hand in a mod lib/COPIES doesn't list (same name, same start).
         head = lib.split(b"\n", 1)[0]
-        for mod in sorted(os.listdir(MODS)):
+        for mod in scanned_mods:
             path = os.path.join(MODS, mod, name)
             if mod not in mods and (read(path) or b"").split(b"\n", 1)[0] == head:
                 bad.append(f"mods/{mod}/{name} looks like a copy of lib/{name}: add {mod} to lib/COPIES")

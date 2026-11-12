@@ -101,3 +101,57 @@ test("a local agent's chat is found when the live list lacks its foreground", as
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Runtime changes are observable before Claude creates a transcript, and do not
+// require another chat message to publish the corrected model/effort/permission.
+test("a followed empty Claude chat publishes live settings and session-only changes", async () => {
+  const h = new Hub("hc");
+  let effort = "high", footer = "⏵⏵ auto mode on (shift+tab to cycle)";
+  const reads: any[] = [];
+  (h as any).client = {
+    call: async (method: string, p: any) => {
+      if (method === "terminal.read") {
+        reads.push(p);
+        return { text: `
+ ▐▛███▛█   Claude Code v2.1.322
+▝▜██████▀  Opus 5.5 with ${effort} effort · Claude Max
+ ▝▝   ▝▝   ~/project
+
+─────────────────────────────
+❯ Try "how does this work?"
+─────────────────────────────
+  ${footer}
+` };
+      }
+      if (method === "machine.exec" && p.argv[3] === "chat")
+        return { code: 0, stdout: Buffer.from("pending\n").toString("base64"), stderr: "" };
+      throw new Error(`Unexpected RPC: ${method}`);
+    },
+    attach: async () => ({ close() {} }),
+  };
+  const t = { address: "t-runtime", state: "live", created_ms: 10, argv: ["claude"], cwd: "/work/demo", labels: {},
+    status: { app: "claude-code", state: "idle" }, foreground: { name: "claude", pid: 4243, argv: ["claude"], cwd: "/work/demo" } };
+  feed(h, "restarted", t.address, t);
+  const chats = new Chats(h);
+  const seen: any[] = [];
+  const page = (r: any, terminal: any) => seen.push(r.runtimeFor(terminal));
+  chats.watch(t.address, page);
+  try {
+    for (let i = 0; i < 30 && !seen.length; i++) await Bun.sleep(20);
+    expect(chats.reader(t.address)!.state).toBe("pending");
+    expect(seen.at(-1)).toMatchObject({ model: "claude-opus-5-5", bannerEffort: "high", perm: "auto" });
+    effort = "max";
+    footer = "⏸ plan mode on (shift+tab to cycle)";
+    await (chats as any).tick(t.address);
+    for (let i = 0; i < 30 && seen.at(-1)?.bannerEffort !== "max"; i++) await Bun.sleep(20);
+    expect(seen.at(-1)).toMatchObject({ bannerEffort: "max", perm: "plan" });
+    footer = "? for shortcuts";
+    await (chats as any).tick(t.address);
+    for (let i = 0; i < 30 && seen.at(-1)?.perm !== null; i++) await Bun.sleep(20);
+    expect(seen.at(-1)?.perm).toBeNull();
+    expect(reads.length).toBeGreaterThanOrEqual(3);
+    expect(reads.every((r) => r.terminal === t.address && r.lines === 0)).toBe(true);
+  } finally {
+    chats.unwatch(t.address, page);
+  }
+});

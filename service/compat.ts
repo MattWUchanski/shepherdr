@@ -686,7 +686,7 @@ export class Compat {
       const kind = reader.kind ?? "claude", dflt = (this.agents as any)?.cached?.(kind, machine) ?? {};
       let meta = reader.conv?.meta ?? {};
       if (t?.created_ms && meta.at && meta.at < t.created_ms) meta = { used: meta.used, window: meta.window };
-      const c = current(kind, t?.foreground?.argv ?? t?.argv ?? [], meta, dflt);
+      const c = current(kind, t?.foreground?.argv ?? t?.argv ?? [], meta, dflt, reader.runtimeFor?.(t) ?? {});
       const row = rowFor(kind, c), label = menuFor(kind, {}).models.find((m: any) => m.id === row)?.name ?? modelName(c.model);
       // the window's model button (mods/chat pickParts): model, level, Fast
       const words = [c.label ?? modelName(c.model), levelName(c.effort), c.fast ? "Fast" : null].filter(Boolean).join(" · ") || NAMES[kind] || "Agent";

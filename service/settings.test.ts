@@ -167,7 +167,7 @@ test("Agents and Tasks say the window's words: the model button, Other CLI, Must
   const C: any = await import("../core/settings.js");
   const s = new Settings();
   s.start();
-  s.choices = C.choicesFrom({ claude: { model: "opus[1m]", effort: "high", per: {} }, codex: { models: [{ id: "gpt-5", label: "GPT-5", efforts: ["low", "high"] }] } });
+  s.choices = C.choicesFrom({ claude: { model: "opus[1m]", effort: "xhigh", per: { "claude-opus-5-5": "high" } }, codex: { models: [{ id: "gpt-5", label: "GPT-5", efforts: ["low", "high"] }] } });
   const agents = s.sections(null).find((x) => x.name === "Agents" && x.level === "all")!;
   expect(agents.rows.map((r) => r.label)).toEqual(["Assistant", "Workers", "Reviewer", "Backup agent", "Reactions", "Suggested next message", "Feedback offers", "Feedback repo", "Ask for a GitHub star"]);
   expect(agents.rows[0].value).toBe("Opus 5.5 · 1M · High");

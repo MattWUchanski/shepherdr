@@ -1474,7 +1474,7 @@ def install_checks(r, rec):
             bad.append(f"link {BIN}/{name} doesn't lead to {dest}")
     sync = r.p(f"{APP}/bin/sync-shared")
     if os.path.isfile(sync):
-        p = subprocess.run([sys.executable, sync, "--check"], capture_output=True, text=True)
+        p = subprocess.run([sys.executable, sync, "--check", "--installed"], capture_output=True, text=True)
         if p.returncode != 0:
             bad.append("shared lib copies differ: " + (p.stderr.strip() or p.stdout.strip()).replace("\n", "; "))
     pkg = r.p(f"{APP}/mods/tasks/bin/herdr_task")

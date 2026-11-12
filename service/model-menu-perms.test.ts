@@ -6,10 +6,11 @@ import { fakeHerdr } from "./fake-herdr";
 import { built, byId, dispatch, fakeGpuiBase, fakeGpuiKit, handler } from "./fake-gpui";
 
 let p: any;
+let restartRequest: any;
 const none = async () => ({ code: 1, stdout: "", stderr: "" });
 mock.module("herdr", () => fakeHerdr({
   props: () => p, theme: () => new Proxy({}, { get: () => "#000000" }), home: () => "/nonexistent-home", exec: none, hc: none,
-  readTextFile: async () => null, writeTextFile: async () => {}, setShared: () => {}, closeOverlay: () => {},
+  readTextFile: async () => null, writeTextFile: async () => {}, setShared: (key: string, value: any) => { if (key === "chat.restartreq") restartRequest = value; }, closeOverlay: () => {},
 }));
 mock.module("gpui-kit", () => fakeGpuiKit());
 mock.module("gpui-base", () => fakeGpuiBase());
@@ -60,4 +61,19 @@ test("a press on Permissions while it's open closes it (the click doesn't open i
   dispatch(byId("perms"), "on_mouse_down", cx);
   dispatch(byId("perms"), "on_click", cx);
   expect(m.permOpen).toBe(false);
+});
+
+
+test("changing only Fast or permissions in a live chat does not choose an unknown effort", () => {
+  p = { current: { agent: "claude", model: "opus", effort: null, fast: false, perm: null },
+    menus: { claude: { ...menus.claude, models: [{ ...menus.claude.models[0], defaultEffort: "xhigh" }] } } };
+  for (const changed of [{ fast: true }, { perm: "bypassPermissions" }]) {
+    const m: any = new ModelMenu();
+    m.init({}, cx);
+    expect(m.level(m.sel)).toBeNull();
+    Object.assign(m.sel, changed);
+    m.restart(cx);
+    expect(restartRequest.pick.effort).toBeNull();
+    expect(restartRequest.pick).toMatchObject(changed);
+  }
 });

@@ -25,6 +25,18 @@ async function run(cmd: string[]) {
 export class Agents {
   constructor(private hub: Hub) {}
 
+  private async terminal(addr: string) {
+    const t: any = this.hub.terminals.get(addr);
+    if (!t || t.foreground?.pid) return t;
+    return this.hub.call("terminal.get", { terminal: addr }).then((detail: any) => ({ ...detail, address: addr })).catch(() => t);
+  }
+
+  private async observed(t: any, reader: any) {
+    if (reader?.lookRuntime) { await reader.lookRuntime(t); return reader.runtimeFor(t); }
+    const runtime = new (AG as any).RuntimeSettings();
+    return runtime.read(t, async (addr: string) => (await this.hub.call<{ text: string }>("terminal.read", { terminal: addr, lines: 0 })).text);
+  }
+
   /** The person's pinned and recent models (core/agents.js PICKS_FILE), as the window's model menu keeps them here */
   private picksPath = where()["model-picks"];
   picks() {
@@ -62,7 +74,7 @@ export class Agents {
    *  installed CLI's models, levels, Fast and permission modes, the person's pinned and recent ones; offline: the
    *  machine it runs on when that machine can't be reached now (a restart there waits for it) */
   async menu(addr: string, reader: any) {
-    const t: any = this.hub.terminals.get(addr);
+    const t: any = await this.terminal(addr);
     if (!t) throw new Error("That agent isn't here any more.");
     const machine = addr.includes("/") ? addr.split("/")[0] : null;
     const kind = kindOf(t) ?? reader?.kind ?? "claude";
@@ -72,7 +84,7 @@ export class Agents {
     let meta = reader?.conv?.meta ?? {};
     // a resumed conversation's log names the model it ran on before: until this process writes, its arguments say
     if (t.created_ms && meta.at && meta.at < t.created_ms) meta = { used: meta.used, window: meta.window };
-    const c = current(kind, t.foreground?.argv ?? t.argv ?? [], meta, dflts[kind]);
+    const c = current(kind, t.foreground?.argv ?? t.argv ?? [], meta, dflts[kind], await this.observed(t, reader));
     const row = rowFor(kind, c);
     const menus = Object.fromEntries(["claude", "codex"].filter((k) => k === kind || !have || have.has(k)).map((k) => [k, menuFor(k, dflts[k], k === kind ? row : null)]));
     return { current: { agent: kind, model: row, effort: c.effort ?? null, fast: !!c.fast, perm: c.perm ?? null }, menus,
@@ -115,13 +127,15 @@ export class Agents {
 
   /** What the restart sheet shows for the agent at addr (log: its reader, for the session and what the log says). */
   async info(addr: string, reader: any) {
-    const t: any = this.hub.terminals.get(addr);
+    const t: any = await this.terminal(addr);
     if (!t) throw new Error("That agent isn't here any more.");
     const machine = addr.includes("/") ? addr.split("/")[0] : null;
     const kind = kindOf(t) ?? "claude";
     const [claude, codex] = await Promise.all([this.defaults("claude", machine), this.defaults("codex", machine)]);
     const dflt: any = { claude, codex };
-    const c = current(kind, t.foreground?.argv ?? t.argv ?? [], reader?.conv?.meta ?? {}, dflt[kind]);
+    let meta = reader?.conv?.meta ?? {};
+    if (t.created_ms && meta.at && meta.at < t.created_ms) meta = { used: meta.used, window: meta.window };
+    const c = current(kind, t.foreground?.argv ?? t.argv ?? [], meta, dflt[kind], await this.observed(t, reader));
     const clis = ["claude", "codex"].map((k) => {
       const m = menuFor(k, dflt[k], k === kind ? c.model : null);
       return { kind: k, name: NAMES[k], models: m.models.map((x: any) => ({ id: x.id, label: x.name, efforts: x.efforts, ...(x.defaultEffort ? { defaultEffort: x.defaultEffort } : {}) })),
@@ -134,14 +148,14 @@ export class Agents {
   /** The model menu's pick: in place when only the model, level or Fast changes (the same agent, its conversation
    *  on), else a restart. Resolves with { live } or { terminal } (the restarted agent's address). */
   async change(addr: string, reader: any, pick: { kind: string; model?: string; effort?: string; speed?: string; perm?: string }) {
-    const t: any = this.hub.terminals.get(addr);
+    const t: any = await this.terminal(addr);
     if (!t || t.state !== "live") throw new Error("That agent isn't running.");
     const machine = addr.includes("/") ? addr.split("/")[0] : null;
     const kind = kindOf(t) ?? reader?.kind ?? "claude";
     const dflt = await this.defaults(kind, machine);
     let meta = reader?.conv?.meta ?? {};
     if (t.created_ms && meta.at && meta.at < t.created_ms) meta = { used: meta.used, window: meta.window };
-    const c = current(kind, t.foreground?.argv ?? t.argv ?? [], meta, dflt);
+    const c = current(kind, t.foreground?.argv ?? t.argv ?? [], meta, dflt, await this.observed(t, reader));
     const from = { agent: kind, model: rowFor(kind, c) ?? "", effort: c.effort ?? "", fast: !!c.fast, perm: c.perm ?? "" };
     const to = { agent: pick.kind, model: pick.model ?? "", effort: pick.effort ?? "", fast: pick.speed === "fast", perm: pick.perm ?? "" };
     if (!LS.liveOK(from, to)) return { terminal: await this.restart(addr, reader, pick) };
@@ -178,11 +192,11 @@ export class Agents {
 
   /** Restarts it on the picked CLI, model, effort and speed; resolves with the new agent's address. */
   async restart(addr: string, reader: any, pick: { kind: string; model?: string; effort?: string; speed?: string; perm?: string }) {
-    const t: any = this.hub.terminals.get(addr);
+    const t: any = await this.terminal(addr);
     if (!t || t.state !== "live") throw new Error("That agent isn't running.");
     const kind = kindOf(t) ?? "claude";
     const old = { agent: kind, argv: t.foreground?.argv ?? t.argv ?? [], session: sessionOf(kind, reader?.path ?? null) };
-    const built = argvFor({ agent: pick.kind, model: pick.model, effort: pick.effort, fast: pick.speed === "fast", perm: pick.perm ?? current(kind, old.argv, {}, {}).perm }, old);
+    const built = argvFor({ agent: pick.kind, model: pick.model, effort: pick.effort, fast: pick.speed === "fast", perm: pick.perm || current(kind, old.argv, {}, {}, await this.observed(t, reader)).perm }, old);
     const pane = t.labels?.["herdr.chat"] ?? "";
     const task = t.labels?.["herdr.task"];
     if (task) {

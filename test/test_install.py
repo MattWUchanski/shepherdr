@@ -144,6 +144,32 @@ class Install(unittest.TestCase):
                 self.assertEqual(after[k], v, k)
         self.assertFalse(os.path.lexists(self.p(".local/bin/herdr-task")))
 
+    def test_doctor_preserves_personal_artifact_copies_but_checks_shipped_mods(self):
+        run("install", "--root", self.root, "--yes")
+        artifact = self.p(APP, "mods/art-example")
+        os.makedirs(artifact)
+        src = self.p(APP, "lib/dirs.js")
+        shutil.copy(src, os.path.join(artifact, "dirs.js"))
+        with open(os.path.join(artifact, "dirs.js"), "rb") as f:
+            before = f.read()
+        # A generated panel legitimately carries its own helper. Doctor must not ask the user
+        # to add that panel to Shepherdr's source manifest or leave machine sync on hold.
+        self.assertIn("whole", run("doctor", "--root", self.root).stdout)
+        with open(os.path.join(artifact, "dirs.js"), "rb") as f:
+            self.assertEqual(f.read(), before)
+        self.assertFalse(os.path.exists(self.p(".herdr/sync-hold")))
+        # The source-development check is still strict about unregistered copies.
+        strict = subprocess.run([sys.executable, self.p(APP, "bin/sync-shared"), "--check"],
+                                capture_output=True, text=True)
+        self.assertNotEqual(strict.returncode, 0)
+        self.assertIn("art-example", strict.stderr)
+        # Existing copies in shipped modules remain checked, including actual drift.
+        with open(self.p(APP, "mods/chat/dirs.js"), "a") as f:
+            f.write("\n// drift\n")
+        broken = run("doctor", "--root", self.root, ok=False)
+        self.assertNotEqual(broken.returncode, 0)
+        self.assertIn("mods/chat/dirs.js differs", broken.stdout)
+
     def test_install_moves_the_data_into_shepherdrs_own_folders(self):
         """SHEP-141: an install over a 3.1.26 home moves ~/.herdr's Shepherdr data into its own folders in one go, says
         so in one line, leaves links at the old paths, and doctor and where say where it all is. Again: nothing more."""
